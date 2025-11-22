@@ -1,0 +1,608 @@
+---
+title: "conociendo-los-datos"
+output: html_document
+---
+
+# Resumen
+
+La industria automotriz está viviendo una transformación impulsada por la tecnología y el análisis de datos, especialmente en el mantenimiento vehicular. El mantenimiento predictivo (PdM) se ha convertido en una herramienta clave al utilizar analítica avanzada, sensores y machine learning para anticipar fallas y realizar intervenciones a tiempo, lo cual es especialmente importante en componentes críticos de camiones.
+
+Uno de los grandes desafíos del PdM es la escasez de datasets públicos reales, porque los fabricantes (OEMs) suelen mantener estos datos privados por su sensibilidad (frecuencia de fallas, tipos de sensores, etc.). Por esta razón, muchos investigadores dependen de datos simulados, como el C-MAPSS de NASA, que no reflejan totalmente la complejidad del mundo real (ruido, censura de datos, desbalanceo, relaciones no lineales, etc.).
+
+El nuevo dataset publicado por SCANIA es una excepción importante, ya que es un conjunto real y público que contiene datos temporales que muestran la degradación gradual de un componente anónimo llamado Componente X. Este dataset multivariante de series de tiempo es rico y puede emplearse para múltiples tareas de PdM: clasificación, regresión, pronóstico, análisis de supervivencia y detección de anomalías.
+
+Este conjunto de datos fue publicado como parte del Industrial Challenge 2024 del IDA en la Universidad de Estocolmo, promoviendo colaboración entre academia e industria. El dataset incluye datos operacionales, especificaciones de camiones y registros de reparación del Componente X (anonimizado por razones de propiedad intelectual). Está disponible públicamente para impulsar el avance en metodologías de PdM.
+
+
+# Resumen de los Datos
+
+El conjunto de datos propuesto está disponible en la página web del reto industrial del Symposium on Intelligent Data Analysis (IDA 2024). 
+
+El dataset está dividido en tres partes: entrenamiento, validación y prueba. Cada parte contiene varios archivos, y en esta sección se ofrecen descripciones detalladas de cada uno.
+
+## Train Set
+
+El train set o conjunto de entrenamiento incluye tres archivos: train_operational_readouts.csv, train_tte.csv y train_specifications.csv, cada uno descrito a continuación.
+
+### train_operational_readouts.csv
+
+El archivo train_operational_readouts.csv contiene los datos operacionales del Componente X en camiones SCANIA. Es una serie de tiempo multivariada con 1.122.452 registros, correspondientes a 23.550 vehículos, y 107 columnas, incluyendo vehicle_id y time_step. El time_step indica cuánto tiempo ha estado funcionando el componente en cada vehículo, y no todos los vehículos tienen la misma frecuencia de muestreo.
+
+El dataset es solo un subconjunto seleccionado por expertos para incluir la información más relevante.
+
+En total se usan 14 variables anonimizadas, organizadas en:
+
+6 histogramas (variables: 167, 272, 291, 158, 459 y 397) con entre 10 y 36 bins cada uno.
+
+8 contadores numéricos (171_0, 666_0, 427_0, 837_0, 309_0, 835_0, 370_0 y 100_0), que son acumulativos y muestran tendencias en el tiempo.
+
+Los histogramas representan distribuciones de condiciones específicas (por ejemplo, distancias recorridas en distintos rangos de temperatura). Cada bin sigue el formato variableid_binindex.
+
+vamos a leer este archivo para echarle un vistazo:
+
+```{r}
+library(readr)
+train_operational_readouts <- read_csv("./data/train_operational_readouts.csv")
+head(train_operational_readouts)
+```
+
+
+
+Entonces por ejemplo podemos hacer un histograma de la variable 167 del vehiculo #2, en donde en el eje x esta el bin (167_0, 167_1, etc) y en el eje y los valores
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+vehiculo_2 <- train_operational_readouts %>%
+  filter(vehicle_id == 2) %>%
+  select(starts_with("167_"))
+
+vehiculo_2_long <- pivot_longer(vehiculo_2, cols = everything(),
+                                names_to = "bin", values_to = "value")
+
+# Ordenar los bins numéricamente
+vehiculo_2_long <- vehiculo_2_long %>%
+  mutate(bin_num = as.integer(sub("167_", "", bin))) %>%
+  arrange(bin_num) %>%
+  mutate(bin = factor(bin, levels = unique(bin)))
+
+# Graficar
+ggplot(vehiculo_2_long, aes(x = bin, y = value)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Histograma de la variable 167 para el vehículo 2",
+       x = "Bins", y = "Valores") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+Otro ejemplo seria si tomamos el histograma de la variable 459 del mismo vehiculo #2. hagamoslo:
+
+```{r, fig.width=14, fig.height=6}
+vehiculo_2 <- train_operational_readouts %>%
+  filter(vehicle_id == 2) %>%
+  select(starts_with("459_"))
+
+vehiculo_2_long <- pivot_longer(vehiculo_2, cols = everything(),
+                                names_to = "bin", values_to = "value")
+
+# Ordenar los bins numéricamente
+vehiculo_2_long <- vehiculo_2_long %>%
+  mutate(bin_num = as.integer(sub("459_", "", bin))) %>%
+  arrange(bin_num) %>%
+  mutate(bin = factor(bin, levels = unique(bin)))
+
+# Graficar
+ggplot(vehiculo_2_long, aes(x = bin, y = value)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Histograma de la variable 459 para el vehículo 2",
+       x = "Bins", y = "Valores") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+
+También se calculó la correlación entre las variables que no son histogramas (los contadores numéricos), usando todos los registros de los vehículos. La figura que haremos muestra que todas estas variables están positivamente correlacionadas: cuando una aumenta, las demás tienden a aumentar también. No existe correlación negativa entre ellas.
+
+```{r}
+### train_tte.csv
+
+#vamos a calcular la correlaciones entre las variables numericas del train_operational_readouts
+library(corrplot)
+train_numerical <- train_operational_readouts %>%
+  select(vehicle_id, time_step, starts_with(c("171_0", "666_0", "427_0", "837_0", "309_0", "835_0", "370_0", "100_0")))
+train_numerical_unique <- train_numerical %>%
+  group_by(vehicle_id) %>%
+  summarise(across(everything(), last))
+cor_matrix <- cor(train_numerical_unique %>% select(-vehicle_id))
+corrplot(cor_matrix, method = "circle", type = "upper", tl.col =
+         "black", tl.srt = 45, title = "Correlación entre variables numéricas")
+```
+
+### train_tte.csv
+
+El archivo train_tte.csv contiene los registros de reparación del Componente X para cada vehículo, indicando el time_to_event (tte), es decir, el momento en que el componente fue reemplazado durante el período de estudio.
+
+Este archivo tiene 23.550 filas y dos columnas:
+
+- length_of_study_time_step: número de time_steps que el componente estuvo en operación.
+- in_study_repair: etiqueta de clase (1 si el componente fue reparado exactamente en ese time_step, 0 si no hubo falla durante ese período).
+
+
+```{r}
+#vamos a leer esta base de datos
+train_tte <- read_csv("./data/train_tte.csv")
+head(train_tte)
+```
+
+
+Habra valores faltantes?
+
+```{r}
+sum(is.na(train_tte))
+```
+Nos damos cuenta que esta base de datos no cuenta con valores faltantes.
+
+
+Podemos sacar una gráfica primeramente para notar la comparación entre componentes sanos y reparados, esta podria ser en una grafica pastel:
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Crear tabla de frecuencias con porcentajes
+freq_df <- train_tte %>%
+  count(in_study_repair, name = "Frequency") %>%
+  mutate(
+    Percentage = round(Frequency / sum(Frequency) * 100, 1),
+    Label = paste0(Percentage, "%"),
+    in_study_repair = factor(in_study_repair, levels = c(0, 1), labels = c("Sano", "Reparado"))
+  )
+
+# Gráfico de pastel con etiquetas
+ggplot(freq_df, aes(x = "", y = Frequency, fill = in_study_repair)) +
+  geom_bar(stat = "identity", width = 1, color = "white") +
+  coord_polar("y", start = 0) +
+  geom_text(aes(label = Label),
+            position = position_stack(vjust = 0.5),
+            color = "white", size = 5, fontface = "bold") +
+  scale_fill_manual(values = c("#4CAF50", "#FF9800")) +  # verde y naranja
+  labs(title = "Distribución de vehículos sanos y reparados",
+       fill = "Estado del vehículo") +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    legend.title = element_text(face = "bold"),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+
+La grafica de distribución del tiempo de observación para ambos grupos, en donde en el eje y sea el numero de vehiculos y en el eje x  los rangos de tiempo de observacion:
+
+```{r}
+# Asegurar que la variable sea factor con etiquetas claras
+train_tte <- train_tte %>%
+  mutate(in_study_repair = factor(in_study_repair, levels = c(0, 1),
+                                  labels = c("Sano", "Reparado")))
+
+# Histograma agrupado por estado
+ggplot(train_tte, aes(x = length_of_study_time_step, fill = in_study_repair)) +
+  geom_histogram(binwidth = 50, position = "dodge", color = "black", alpha = 0.8) +
+  labs(title = "Distribución del Tiempo de Observación por Estado del Vehículo",
+       x = "Tiempo de Observación (time_steps)",
+       y = "Número de Vehículos",
+       fill = "Estado del Vehículo") +
+  scale_fill_manual(values = c("#4CAF50", "#FF9800")) +  # verde y naranja
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    legend.title = element_text(face = "bold"),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+### train_specifications.csv
+
+El archivo train_specifications.csv incluye las especificaciones de cada vehículo, como el tipo de motor o la configuración de ruedas. Contiene 23.550 registros y ocho variables categóricas, todas anonimizadas y codificadas como categorías del tipo Cat0, Cat1, …, Cat8.
+
+```{r}
+train_specifications <- read_csv("./data/train_specifications.csv")
+head(train_specifications)
+```
+
+
+Tiene valores en blanco?
+
+```{r}
+sum(is.na(train_specifications))
+```
+Podemos ver que no hay valores faltantes en este archivo.
+
+Ahora podemos intentar ver las categorias presentes en cada variable categorica, usando graficos de barras para cada variable categorica.
+
+```{r}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+# Convertir a formato largo para facilitar la visualización
+train_spec_long <- train_specifications %>%
+  pivot_longer(cols = -vehicle_id, names_to = "Category", values_to =
+                       "Value")
+# Graficar la distribución de cada categoría
+ggplot(train_spec_long, aes(x = Value, fill = Value)) +
+  geom_bar() +
+  facet_wrap(~ Category, scales = "free_x") +
+  labs(title = "Distribución de Categorías en Especificaciones del Vehículo",
+       x = "Categorías",
+       y = "Número de Vehículos") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold",
+                             size = 14),
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    legend.position = "none"
+  )
+```
+
+
+## Validation Set
+
+El conjunto de validación incluye tres archivos: validation_labels.csv, validation_operational_readouts.csv y validation_specification.csv.
+
+
+### validation_operational_readouts.csv
+
+El archivo validation_operational_readouts.csv tiene la misma estructura que el de entrenamiento, pero con una diferencia clave: los datos operacionales están incompletos.
+
+Solo se entrega una parte de las observaciones de cada vehículo, llegando hasta un readout elegido aleatoriamente. Por eso, no se incluye toda la vida útil del vehículo.
+
+Esto se hace para simular un escenario realista donde un modelo de predicción solo conoce la información disponible hasta el momento actual.
+
+Esto lo podemos graficar haciendo lo siguiente:
+
+-Los puntos verdes son los readouts registrados desde el inicio de operación.
+- La estrella amarilla es el último readout disponible (seleccionado aleatoriamente).
+Todo lo que sucede después de ese punto no se proporciona.
+
+```{r}
+#primero vamos a leer el archivo
+validation_operational_readouts <- read_csv("./data/validation_operational_readouts.csv")
+head(validation_operational_readouts)
+```
+
+
+ahora la figura que necesitamos debe ilustrar un ejemplo de un indicador de salud hipotético o modelo de degradación del componente X instalado en un vehículo del conjunto de validación. Los puntos verdes representan las lecturas registradas durante el tiempo desde el inicio de su funcionamiento, y la estrella amarilla representa la última lectura simulada para este vehículo, seleccionada aleatoriamente entre todas las lecturas posibles. Esto significa que solo disponemos de información hasta esa lectura, y el resto de la información no se proporciona.
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(readr)
+
+# Seleccionar un vehículo del conjunto de validación
+vehiculo_id <- 45
+vehiculo_ejemplo <- validation_operational_readouts %>%
+  filter(vehicle_id == vehiculo_id)
+
+# Verificar que hay datos
+if (nrow(vehiculo_ejemplo) > 0) {
+
+  # Simular una lectura final aleatoria
+  set.seed(123)
+  posibles_tiempos <- vehiculo_ejemplo$time_step[!is.na(vehiculo_ejemplo$`171_0`)]
+  limite <- sample(posibles_tiempos, 1)
+
+  # Filtrar hasta ese punto
+  vehiculo_visible <- vehiculo_ejemplo %>%
+    filter(time_step <= limite)
+
+  ultima_lectura <- vehiculo_visible %>%
+    filter(time_step == max(time_step))
+
+  # Definir zonas de degradación
+  zonas <- data.frame(
+    xmin = c(48, 24, 12, 6, 0),
+    xmax = c(Inf, 48, 24, 12, 6),
+    class = factor(c("Class 0", "Class 1", "Class 2", "Class 3", "Class 4"),
+                   levels = c("Class 0", "Class 1", "Class 2", "Class 3", "Class 4")),
+    fill = c("#e0f7fa", "#b2ebf2", "#80deea", "#4dd0e1", "#26c6da")
+  )
+
+  # Graficar
+  ggplot() +
+    # Zonas de degradación
+    geom_rect(data = zonas,
+              aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = class),
+              alpha = 0.3) +
+    # Línea de salud
+    geom_line(data = vehiculo_visible, aes(x = time_step, y = `171_0`), color = "blue", linewidth = 1) +
+    # Puntos verdes
+    geom_point(data = vehiculo_visible, aes(x = time_step, y = `171_0`), color = "green", size = 2) +
+    # Estrella amarilla
+    geom_point(data = ultima_lectura, aes(x = time_step, y = `171_0`),
+               color = "yellow", shape = 8, size = 6, stroke = 2) +
+    # Etiqueta de falla (opcional)
+    annotate("text", x = 2, y = min(vehiculo_visible$`171_0`, na.rm = TRUE),
+             label = "✖ Falla", color = "red", size = 6, fontface = "bold") +
+    # Estética
+    scale_fill_manual(values = zonas$fill) +
+    labs(
+      title = "Modelo de Degradación del Componente X",
+      subtitle = paste("Última lectura simulada en time_step =", limite),
+      x = "Time Step",
+      y = "Indicador de Salud (171_0)",
+      fill = "Clase de Degradación"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(hjust = 0.5),
+      axis.title = element_text(face = "bold"),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold")
+    )
+
+} else {
+  message("No hay datos disponibles para vehicle_id = ", vehiculo_id)
+}
+
+```
+
+
+### validation_labels.csv
+
+El archivo validation_labels.csv tiene 5.046 filas, una por cada vehículo incluido en los datos operacionales del set de validación. Contiene una columna llamada class_label, que indica la clase asociada al último readout disponible de cada vehículo.
+
+Ese último readout fue seleccionado aleatoriamente (como se explicó antes) y su posición temporal respecto al fallo se clasifica en cinco clases:
+
+0: más de 48 time_steps antes de la falla
+
+1: entre 48 y 24
+
+2: entre 24 y 12
+
+3: entre 12 y 6
+
+4: entre 6 y 0
+
+Estas clases representan la ventana temporal desde la cual fue elegido el último readout simulado. Por ejemplo, en la Figura 6+que haremos el último readout corresponde a la clase 2.
+
+El conjunto está desbalanceado, con más vehículos en la clase 0. La Tabla 1 muestra cuántos vehículos pertenecen a cada una de las cinco clases.
+
+```{r}
+#vamos a leer este archivo
+validation_labels <- read_csv("./data/validation_labels.csv")
+head(validation_labels)
+```
+```{r}
+# Contar la cantidad de vehículos en cada clase
+class_counts <- validation_labels %>%
+  group_by(class_label) %>%
+  summarise(Count = n())
+# Mostrar los conteos
+print(class_counts)
+```
+Para visualizar mejor los datos de validación, se aplicaron dos técnicas de reducción de dimensionalidad: PCA y t-SNE, usando únicamente el último readout de cada vehículo.
+
+Las Figuras siguientes muestran el conjunto de datos reducido a dos dimensiones con estas técnicas, coloreando cada vehículo según su clase.
+
+En ambos casos, las cinco clases aparecen mezcladas en el espacio bidimensional, lo que refleja la alta complejidad del problema cuando las características se proyectan en solo dos dimensiones.
+
+```{r}
+library(ggplot2)
+library(Rtsne)
+library(dplyr)
+
+# Seleccionar el último readout de cada vehículo
+validation_last_readouts <- validation_operational_readouts %>%
+  group_by(vehicle_id) %>%
+  filter(time_step == max(time_step)) %>%
+  ungroup()
+
+# Guardar los IDs antes de eliminar columnas
+veh_ids <- validation_last_readouts$vehicle_id
+
+# Eliminar columnas no numéricas y columnas con NAs
+validation_last_readouts_clean <- validation_last_readouts %>%
+  select(-vehicle_id, -time_step) %>%
+  drop_na()
+
+# Filtrar también las etiquetas para que coincidan con las filas restantes
+valid_rows <- as.numeric(rownames(validation_last_readouts_clean))
+filtered_labels <- validation_labels$class_label[valid_rows]
+
+# Aplicar t-SNE
+set.seed(123)
+tsne_result <- Rtsne(as.matrix(validation_last_readouts_clean), dims = 2,
+                     perplexity = 30, verbose = TRUE, max_iter = 500)
+
+# Crear un data frame con los resultados
+tsne_df <- data.frame(
+  Dim1 = tsne_result$Y[, 1],
+  Dim2 = tsne_result$Y[, 2],
+  class_label = factor(filtered_labels)
+)
+
+# Graficar
+ggplot(tsne_df, aes(x = Dim1, y = Dim2, color = class_label)) +
+  geom_point(alpha = 0.7, size = 2) +
+  labs(title = "t-SNE de los Últimos Readouts del Conjunto de Validación",
+       x = "Dimensión 1",
+       y = "Dimensión 2",
+       color = "Clase") +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    axis.title = element_text(face = "bold"),
+    legend.title = element_text(face = "bold"),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+Bien ahora podemos hacer la grafica de PCA:
+
+```{r}
+# Seleccionar el último readout de cada vehículo
+validation_last_readouts <- validation_operational_readouts %>%
+  group_by(vehicle_id) %>%
+  filter(time_step == max(time_step)) %>%
+  ungroup()
+
+# Guardar los IDs antes de limpiar
+veh_ids <- validation_last_readouts$vehicle_id
+
+# Eliminar columnas no numéricas y filas con NA
+validation_last_readouts_clean <- validation_last_readouts %>%
+  select(-vehicle_id, -time_step) %>%
+  drop_na()
+
+# Filtrar también las etiquetas para que coincidan con las filas restantes
+valid_rows <- as.numeric(rownames(validation_last_readouts_clean))
+filtered_labels <- validation_labels$class_label[valid_rows]
+
+# Aplicar PCA
+pca_result <- prcomp(validation_last_readouts_clean, center = TRUE, scale. = TRUE)
+
+# Crear data frame con las dos primeras componentes principales
+pca_df <- data.frame(
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2],
+  class_label = factor(filtered_labels)
+)
+
+# Graficar
+ggplot() +
+  geom_point(data = fondo_df, aes(x = PC1, y = PC2), color = "lightblue", alpha = 0.3, size = 1.5) +
+  geom_point(data = pca_df, aes(x = PC1, y = PC2, color = class_label), alpha = 0.8, size = 2) +
+  scale_color_manual(values = c("green", "limegreen", "orange", "gold", "red")) +
+  labs(title = "PCA de los Últimos Readouts del Conjunto de Validación",
+       x = "Componente Principal 1",
+       y = "Componente Principal 2",
+       color = "Clase") +
+  ylim(-2, 2) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    axis.title = element_text(face = "bold"),
+    legend.title = element_text(face = "bold"),
+    legend.text = element_text(size = 10)
+  )
+
+
+```
+
+
+### validation_specification.csv
+
+
+El archivo validation_specification.csv tiene la misma estructura que train_specifications.csv, pero contiene los datos de 5.046 vehículos del conjunto de validación.
+
+Las categorías posibles para cada variable se muestran acontinuacion:
+
+```{r}
+validation_specifications <- read_csv("./data/validation_specifications.csv")
+head(validation_specifications)
+```
+
+```{r}
+#graficas con ggplot2 para cada variable categorica
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+# Convertir a formato largo para facilitar la visualización
+validation_spec_long <- validation_specifications %>%
+  pivot_longer(cols = -vehicle_id, names_to = "Category", values_to =
+                       "Value")
+# Graficar la distribución de cada categoría
+ggplot(validation_spec_long, aes(x = Value, fill = Value)) +
+  geom_bar() +
+  facet_wrap(~ Category, scales = "free_x") +
+  labs(title = "Distribución de Categorías en Especificaciones del Vehículo (Valid
+ación)",
+       x = "Categorías",
+       y = "Número de Vehículos") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold",
+                             size = 14),
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    legend.position = "none"
+  )
+```
+
+## Test Set
+
+El conjunto de prueba incluye dos archivos: test_operational_readouts.csv y test_specifications.csv.
+
+A diferencia de los conjuntos de entrenamiento y validación, no contiene información sobre el tiempo de falla ni etiquetas del Componente X. Esto se debe a que el objetivo del reto industrial de la conferencia IDA 2024 es precisamente predecir esas etiquetas o la vida útil del componente.
+
+Una vez finalice el desafío, se revelarán las verdaderas clases del conjunto de prueba.
+
+### test_operational_readouts.csv
+
+El archivo test_operational_readouts.csv funciona igual que el de validación: el último readout de cada vehículo se selecciona aleatoriamente de su secuencia completa para simular un escenario real.
+
+En total contiene:
+- 198.140 readouts,
+- 14 variables (107 columnas en total),
+- 5045 vehículos únicos.
+
+Al igual que en los datasets de entrenamiento y validación, el porcentaje de valores faltantes es menor al 1% por variable.
+
+### test_specifications.csv
+
+El archivo test_specifications.csv contiene la información de especificaciones de los 5.045 vehículos del conjunto de prueba. Las variables son categóricas y toman valores entre Cat0, Cat1, …, Cat8.
+Además, no presenta valores faltantes.
+
+
+# Validación Ténica
+
+Los fabricantes (OEMs) suelen evitar compartir datos operacionales por razones como cumplimiento GDPR, acuerdos de confidencialidad (NDA), propiedad del dato y tasas de falla. Por ello, muchos trabajos en mantenimiento predictivo (PdM) dependen de datos privados, dificultando comparar métodos entre investigaciones.  
+El nuevo dataset de **SCANIA** puede actuar como un **benchmark** para facilitar comparaciones y resultados reproducibles.
+
+---
+
+# Utilidad del dataset
+
+El conjunto de datos es útil para varias tareas de *machine learning* gracias a dos características clave:
+
+1. **Es un dataset real**, obtenido de camiones reales.  
+2. Posee estructura de **serie de tiempo multivariada**.
+
+### Aplicaciones principales:
+- **Regresión:** predecir vida útil restante (RUL) o el tiempo hasta la reparación.  
+- **Análisis de supervivencia:** modelar probabilidad de falla considerando datos censurados.  
+- **Clasificación:** determinar si un vehículo fallará dentro de una ventana de tiempo específica.
+
+---
+
+### Función de costo propuesta por la empresa
+
+Para evaluar modelos, se define una función de costo:
+
+\[
+\text{Total\_cost} = \text{Cost}_{n,m} \times \text{Nº de instancias}
+\]
+
+Donde:  
+- **n** = clase real  
+- **m** = clase predicha  
+- **n, m ∈ {0,1,2,3,4}**
+
+Interpretación del costo:  
+- Si **n < m** → *falso positivo*  
+- Si **n > m** → *falso negativo*
+
+⚠️ **Los falsos negativos tienen un costo mucho mayor que los falsos positivos.**
+
+
+
+
