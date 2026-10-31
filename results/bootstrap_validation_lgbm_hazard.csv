@@ -8,3 +8,7 @@ H1 hazard: landmarking vs conv,2885,-851,6761,False
 Modelo: hazard vs lgbm (conv),-710,-4917,3309,False
 Mejor lgbm vs siempre 4,-15008,-19773,-9420,True
 Mejor hazard vs siempre 4,-15718,-19997,-11238,True
+H2 ordinal conv: min_costo vs argmax,-22058,-30427,-13760,True
+H1 ordinal: landmarking vs conv,7884,2782,13251,True
+Modelo: ordinal vs lgbm (conv),1114,-3591,5603,False
+Mejor ordinal vs siempre 4,-13894,-18980,-8390,True

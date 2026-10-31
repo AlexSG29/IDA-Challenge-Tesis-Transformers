@@ -47,3 +47,27 @@ hazard,landmarking,isotónica,min_costo,0.0526,35594,47.2
 hazard,landmarking,prior,argmax,0.0533,56930,0.1
 hazard,landmarking,prior,umbral,0.0533,36085,43.1
 hazard,landmarking,prior,min_costo,0.0533,35662,42.1
+ordinal,convencional,sin calibrar,argmax,0.0565,56990,0.2
+ordinal,convencional,sin calibrar,umbral,0.0565,35122,39.0
+ordinal,convencional,sin calibrar,min_costo,0.0565,33484,47.0
+ordinal,convencional,temperatura,argmax,0.0555,56990,0.2
+ordinal,convencional,temperatura,umbral,0.0555,35612,39.0
+ordinal,convencional,temperatura,min_costo,0.0555,34505,29.9
+ordinal,convencional,isotónica,argmax,0.0521,57400,0.0
+ordinal,convencional,isotónica,umbral,0.0521,35672,39.1
+ordinal,convencional,isotónica,min_costo,0.0521,35342,38.5
+ordinal,convencional,prior,argmax,0.0548,57020,0.3
+ordinal,convencional,prior,umbral,0.0548,35202,39.2
+ordinal,convencional,prior,min_costo,0.0548,33794,34.0
+ordinal,landmarking,sin calibrar,argmax,0.0677,56990,0.2
+ordinal,landmarking,sin calibrar,umbral,0.0677,43796,49.1
+ordinal,landmarking,sin calibrar,min_costo,0.0677,40704,68.4
+ordinal,landmarking,temperatura,argmax,0.0582,56990,0.2
+ordinal,landmarking,temperatura,umbral,0.0582,43456,49.5
+ordinal,landmarking,temperatura,min_costo,0.0582,41445,31.9
+ordinal,landmarking,isotónica,argmax,0.0528,57400,0.0
+ordinal,landmarking,isotónica,umbral,0.0528,43556,48.7
+ordinal,landmarking,isotónica,min_costo,0.0528,42196,48.0
+ordinal,landmarking,prior,argmax,0.0552,56970,0.2
+ordinal,landmarking,prior,umbral,0.0552,42471,43.1
+ordinal,landmarking,prior,min_costo,0.0552,40649,37.3

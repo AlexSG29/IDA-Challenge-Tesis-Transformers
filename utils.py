@@ -488,3 +488,57 @@ class TabularPreprocessor:
             s = df[c].astype(str).to_numpy()
             parts.append(np.column_stack([s == l for l in self.levels_[c][1:]]).astype(np.float32))
         return np.hstack(parts)
+
+
+# ---------------------------------------------------------------- regresión logística ordinal
+class OrdinalLogistic:
+    """Odds proporcionales: P(Y <= k | x) = σ(θ_k − x·b), k = 0..3, con θ crecientes y L2 en b."""
+    def __init__(self, n_classes: int = 5, l2: float = 1.0, max_iter: int = 300):
+        self.K, self.l2, self.max_iter = n_classes, l2, max_iter
+
+    def _theta(self, t):
+        return np.cumsum(np.r_[t[0], np.exp(t[1:])])   # garantiza θ_0 < θ_1 < ... < θ_3
+
+    def _f(self, params, X, y, w):
+        K, n = self.K, X.shape[0]
+        t, b = params[:K - 1], params[K - 1:]
+        th = self._theta(t)
+        eta = (X @ b.astype(np.float32)).astype(np.float64)
+        su = expit(np.r_[th, np.inf][y] - eta)          # P(Y <= y)
+        sl = expit(np.r_[-np.inf, th][y] - eta)         # P(Y <= y-1)
+        p = np.clip(su - sl, 1e-12, None)
+        sw = w.sum()
+        loss = -(w * np.log(p)).sum() / sw + 0.5 * self.l2 * (b @ b) / n
+        du, dl = su * (1 - su), sl * (1 - sl)
+        g_eta = w * (du - dl) / p / sw
+        gb = (X.T @ g_eta.astype(np.float32)).astype(np.float64) + self.l2 * b / n
+        g_th = np.zeros(K - 1)
+        m = y < K - 1
+        np.add.at(g_th, y[m], -(w * du / p)[m] / sw)
+        m = y > 0
+        np.add.at(g_th, y[m] - 1, (w * dl / p)[m] / sw)
+        g_t = np.zeros(K - 1)
+        g_t[0] = g_th.sum()
+        for j in range(1, K - 1):
+            g_t[j] = np.exp(t[j]) * g_th[j:].sum()
+        return loss, np.r_[g_t, gb]
+
+    def fit(self, X, y, w=None):
+        X = np.asarray(X, np.float32)
+        y = np.asarray(y, int)
+        w = np.ones(len(y)) if w is None else np.asarray(w, float)
+        cum = np.cumsum(np.bincount(y, weights=w, minlength=self.K))[:-1] / w.sum()
+        cum = np.clip(cum, 1e-4, 1 - 1e-4)
+        th0 = np.log(cum / (1 - cum))
+        t0 = np.r_[th0[0], np.log(np.maximum(np.diff(th0), 1e-3))]
+        self.res_ = minimize(self._f, np.r_[t0, np.zeros(X.shape[1])], args=(X, y, w),
+                             jac=True, method="L-BFGS-B", options={"maxiter": self.max_iter})
+        self.t_, self.b_ = self.res_.x[:self.K - 1], self.res_.x[self.K - 1:]
+        return self
+
+    def predict_proba(self, X):
+        th = self._theta(self.t_)
+        eta = (np.asarray(X, np.float32) @ self.b_.astype(np.float32)).astype(np.float64)
+        C = expit(th[None, :] - eta[:, None])
+        C = np.c_[np.zeros(len(eta)), C, np.ones(len(eta))]
+        return np.clip(np.diff(C, axis=1), 1e-12, 1)
