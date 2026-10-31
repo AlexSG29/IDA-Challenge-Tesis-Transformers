@@ -1,1 +1,26 @@
-/data/
+# Datos (no se versionan: ver README)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Resultados pesados (las tablas y figuras finales sí se pueden versionar)
+results/*.parquet
+results/*.pkl
+results/models/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editores / SO
+.vscode/*
+!.vscode/settings.json
+.DS_Store
+Thumbs.db

@@ -1,0 +1,22 @@
+[project]
+name = "ida-challenge-tesis"
+version = "0.1.0"
+description = "Mantenimiento predictivo sensible al costo en vehículos pesados (Scania Component X)"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "polars>=1.0",
+    "pyarrow>=16",
+    "numpy>=1.26",
+    "scikit-learn>=1.5",
+    "lightgbm>=4.3",
+    "torch>=2.3",
+    "matplotlib>=3.8",
+    "tqdm>=4.66",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29",
+    "nbstripout>=0.7",
+]
