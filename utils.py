@@ -8,6 +8,8 @@ import pandas as pd
 import numpy as np
 import lightgbm as lgb
 from sklearn.metrics import roc_auc_score
+from scipy.optimize import minimize_scalar
+from sklearn.isotonic import IsotonicRegression
 
 
 ROOT = Path(__file__).resolve().parent
@@ -294,3 +296,96 @@ def position_weights(train_pts: pd.DataFrame, target_pts: pd.DataFrame,
     w = p / (1 - p)
     w = np.minimum(w, np.quantile(w, clip_q))
     return w / w.mean()
+
+
+    # ---------------------------------------------------------------- predicciones guardadas
+PREDS = PROCESSED / "preds"
+PRED_COLS = [f"p{k}" for k in range(5)]
+
+
+def save_predictions(model: str, form: str, split: str, df: pd.DataFrame,
+                     P: np.ndarray, y=None, w=None) -> Path:
+    """Guarda probabilidades por punto de corte: data/processed/preds/<model>_<form>_<split>.parquet"""
+    PREDS.mkdir(parents=True, exist_ok=True)
+    out = df[[ID, T]].reset_index(drop=True).copy()
+    out[PRED_COLS] = P
+    if y is not None:
+        out["y"] = np.asarray(y, int)
+    out["w"] = 1.0 if w is None else np.asarray(w, float)
+    path = PREDS / f"{model}_{form}_{split}.parquet"
+    out.to_parquet(path, index=False)
+    return path
+
+
+def load_predictions(model: str, form: str, split: str) -> pd.DataFrame:
+    return pd.read_parquet(PREDS / f"{model}_{form}_{split}.parquet")
+
+
+# ---------------------------------------------------------------- calibración
+class TemperatureScaler:
+    """Divide los log-probabilidades por una temperatura t que minimiza el log-loss."""
+    def fit(self, P, y, w=None):
+        y = np.asarray(y, int)
+        w = np.ones(len(y)) if w is None else np.asarray(w, float)
+        L = np.log(np.clip(P, 1e-12, 1))
+        def nll(t):
+            Z = L / t
+            Z -= Z.max(1, keepdims=True)
+            lp = Z - np.log(np.exp(Z).sum(1, keepdims=True))
+            return -(w * lp[np.arange(len(y)), y]).sum() / w.sum()
+        self.t_ = minimize_scalar(nll, bounds=(0.05, 20), method="bounded").x
+        return self
+
+    def transform(self, P):
+        Z = np.log(np.clip(P, 1e-12, 1)) / self.t_
+        Z -= Z.max(1, keepdims=True)
+        E = np.exp(Z)
+        return E / E.sum(1, keepdims=True)
+
+
+class IsotonicOVR:
+    """Regresión isotónica por clase (uno contra el resto) y renormalización."""
+    def fit(self, P, y, w=None):
+        y = np.asarray(y, int)
+        self.iso_ = [IsotonicRegression(y_min=0, y_max=1, out_of_bounds="clip")
+                     .fit(P[:, k], (y == k).astype(float), sample_weight=w)
+                     for k in range(P.shape[1])]
+        return self
+
+    def transform(self, P):
+        Q = np.column_stack([iso.predict(P[:, k]) for k, iso in enumerate(self.iso_)]) + 1e-6
+        return Q / Q.sum(1, keepdims=True)
+
+
+def brier(y, P, w=None) -> float:
+    """Puntaje de Brier multiclase (0 = perfecto)."""
+    Y = np.eye(P.shape[1])[np.asarray(y, int)]
+    return float(np.average(((P - Y) ** 2).sum(1), weights=w))
+
+
+# ---------------------------------------------------------------- regla de umbral
+def decide_threshold(P: np.ndarray, theta: float) -> np.ndarray:
+    """Clase 4 si P(falla) = 1 - p0 >= theta; si no, clase 0."""
+    return np.where(1 - P[:, 0] >= theta, 4, 0)
+
+
+def best_threshold(P, y, grid=None, cost=COST):
+    """Umbral que minimiza el costo total (se busca en validation)."""
+    grid = np.linspace(0.001, 0.5, 500) if grid is None else grid
+    costs = [total_cost(y, decide_threshold(P, t), cost) for t in grid]
+    i = int(np.argmin(costs))
+    return float(grid[i]), costs[i]
+
+
+    # ---------------------------------------------------------------- incertidumbre
+def paired_bootstrap(y, yhat_a, yhat_b, B: int = 2000, seed: int = 0, cost=COST) -> dict:
+    """Diferencia de costo total (A - B) con IC percentil al 95 %, remuestreando vehículos."""
+    y = np.asarray(y, int)
+    ca = cost[y, np.asarray(yhat_a, int)]
+    cb = cost[y, np.asarray(yhat_b, int)]
+    diff = ca - cb
+    rng = np.random.default_rng(seed)
+    boots = np.array([diff[rng.integers(0, len(diff), len(diff))].sum() for _ in range(B)])
+    lo, hi = np.percentile(boots, [2.5, 97.5])
+    return {"diferencia": int(diff.sum()), "IC95_inf": int(lo), "IC95_sup": int(hi),
+            "significativa": bool(lo > 0 or hi < 0)}
