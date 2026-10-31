@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import numpy as np
+import lightgbm as lgb
 
 ROOT = Path(__file__).resolve().parent
 RAW = ROOT / "data" / "raw"
@@ -108,7 +109,7 @@ def build_landmarks(ro: pd.DataFrame, tte: pd.DataFrame, k: int = 10,
     """Elige al azar hasta k lecturas por vehículo como puntos de predicción t*.
 
     - time_left: tiempo desde t* hasta la reparación o el fin del estudio.
-    
+
     - event: 1 si hubo reparación, 0 si está censurado.
     - y_conv: clase convencional (los censurados se etiquetan 0).
     - y_cens: clase con censura; NaN si está censurado y quedan ≤ 48 unidades.
@@ -134,3 +135,97 @@ def eval_points(ro: pd.DataFrame, labels: pd.DataFrame) -> pd.DataFrame:
     """Última lectura de cada vehículo + su class_label (validation y test)."""
     last = ro[[ID, T]].sort_values([ID, T]).groupby(ID).tail(1)
     return last.merge(labels, on=ID, validate="one_to_one").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------- variables tabulares
+def build_features(ro: pd.DataFrame, points: pd.DataFrame, n_last: int = 5,
+                   chunk: int = 10) -> pd.DataFrame:
+    """Una fila por punto de corte (vehicle_id, time_step) con el resumen de la historia hasta t*.
+
+    - <var>_last: valor en t* (acumulados originales, tasas d_, proporciones p_ y dt).
+    - <var>_mean y <var>_slope: media y pendiente respecto al tiempo en las últimas
+      n_last lecturas (ignorando faltantes). Solo para d_, p_ y dt.
+    - time_step: edad del vehículo en t*.
+    ro debe venir ordenado por vehicle_id y time_step (como lo deja 01_datos).
+    """
+    vid, t = ro[ID].to_numpy(), ro[T].to_numpy(np.float64)
+    ok = (np.diff(vid) > 0) | ((np.diff(vid) == 0) & (np.diff(t) > 0))
+    assert ok.all(), "ro debe venir ordenado por vehicle_id y time_step"
+
+    keys = pd.DataFrame({ID: vid, T: t, "_i": np.arange(len(ro))})
+    pts = points[[ID, T]].drop_duplicates().astype({T: np.float64})
+    idx = np.sort(keys.merge(pts, on=[ID, T])["_i"].to_numpy())
+    del keys
+    first = np.r_[True, vid[1:] != vid[:-1]]
+    gstart = np.maximum.accumulate(np.where(first, np.arange(len(ro)), 0))
+    start = np.maximum(idx - n_last + 1, gstart[idx])
+
+    def wsum(a):  # suma de cada ventana [start, idx] con sumas acumuladas
+        cs = np.concatenate([np.zeros((1, a.shape[1])), np.cumsum(a, axis=0)])
+        return cs[idx + 1] - cs[start]
+
+    raw = [c for c in ro.columns if c[0].isdigit()]
+    dyn = [c for c in ro.columns if c.startswith(("d_", "p_"))] + ["dt"]
+    blocks = [pd.DataFrame({ID: vid[idx], T: t[idx]}),
+              pd.DataFrame(ro[raw].to_numpy(np.float32)[idx], columns=[f"{c}_last" for c in raw])]
+
+    for i in range(0, len(dyn), chunk):  # por bloques para no agotar la RAM
+        cols = dyn[i:i + chunk]
+        x = ro[cols].to_numpy(np.float64)
+        m = ~np.isnan(x)
+        x0 = np.where(m, x, 0.0)
+        tt = np.where(m, t[:, None], 0.0)
+        n, sx, st = wsum(m.astype(np.float64)), wsum(x0), wsum(tt)
+        sxt, stt = wsum(x0 * tt), wsum(tt * tt)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            mean = sx / n
+            var_t = stt / n - (st / n) ** 2
+            slope = (sxt / n - (st / n) * mean) / var_t
+        slope[(n < 2) | (var_t <= 1e-9)] = np.nan
+        for name, arr in (("last", x[idx]), ("mean", mean), ("slope", slope)):
+            blocks.append(pd.DataFrame(arr.astype(np.float32),
+                                       columns=[f"{c}_{name}" for c in cols]))
+    return pd.concat(blocks, axis=1)
+
+
+# ---------------------------------------------------------------- costos y decisiones
+# Fila = clase real, columna = clase predicha (IDA 2024 Industrial Challenge)
+COST = np.array([[  0,   7,   8,   9,  10],
+                 [200,   0,   7,   8,   9],
+                 [300, 200,   0,   7,   8],
+                 [400, 300, 200,   0,   7],
+                 [500, 400, 300, 200,   0]])
+
+
+def total_cost(y_true, y_pred, cost=COST) -> int:
+    return int(cost[np.asarray(y_true, int), np.asarray(y_pred, int)].sum())
+
+
+def decide_argmax(P: np.ndarray) -> np.ndarray:
+    """Clase más probable."""
+    return P.argmax(axis=1)
+
+
+def decide_min_cost(P: np.ndarray, cost=COST) -> np.ndarray:
+    """Clase con menor costo esperado: argmin_m sum_k p_k C[k, m]."""
+    return (P @ cost).argmin(axis=1)
+
+
+def calibration_split(vehicle_ids, frac: float = 0.2, seed: int = 0) -> set:
+    """Conjunto de vehículos reservados para calibración (partición por vehículo)."""
+    v = np.unique(vehicle_ids)
+    rng = np.random.default_rng(seed)
+    return set(rng.choice(v, size=int(round(frac * len(v))), replace=False))
+
+
+# ---------------------------------------------------------------- modelos
+def train_lgbm(X_fit, y_fit, X_val, y_val, params=None, seed=0):
+    """LightGBM multiclase con early stopping en validación."""
+    p = dict(objective="multiclass", num_class=5, learning_rate=0.05, num_leaves=31,
+             min_data_in_leaf=50, feature_fraction=0.5, bagging_fraction=0.8,
+             bagging_freq=1, seed=seed, verbose=-1)
+    p.update(params or {})
+    dfit = lgb.Dataset(X_fit, y_fit)
+    dval = lgb.Dataset(X_val, y_val, reference=dfit)
+    return lgb.train(p, dfit, num_boost_round=2000, valid_sets=[dval],
+                     callbacks=[lgb.early_stopping(100, verbose=False)])
