@@ -22,7 +22,8 @@ results/          tablas y figuras finales
 
 Descargar el dataset desde el repositorio de Scania / SND
 (Kharazian et al. 2025, *Scientific Data*, doi:10.1038/s41597-025-04802-6)
-y copiar los 9 CSV en `data/raw/`:
+y copiar los 9 CSV en una subcarpeta por partición, `data/raw/<split>/`
+(p. ej. `data/raw/train/train_operational_readouts.csv`):
 
 - `train_operational_readouts.csv`, `train_specifications.csv`, `train_tte.csv`
 - `validation_operational_readouts.csv`, `validation_specifications.csv`, `validation_labels.csv`
