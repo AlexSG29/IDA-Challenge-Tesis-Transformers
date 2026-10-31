@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, accuracy_score
 from scipy.optimize import minimize_scalar
 from sklearn.isotonic import IsotonicRegression
 from scipy.optimize import minimize
@@ -271,8 +271,9 @@ def adversarial_auc(A: pd.DataFrame, B: pd.DataFrame, cols, w_A=None, seed: int 
     m = lgb.train(dict(objective="binary", verbose=-1, seed=seed),
                   lgb.Dataset(X.iloc[tr], y[tr], weight=w[tr]), num_boost_round=200)
     auc = roc_auc_score(y[te], m.predict(X.iloc[te]), sample_weight=w[te])
+    acu = accuracy_score(y[te], m.predict(X.iloc[te]), sample_weight=w[te])
     imp = pd.Series(m.feature_importance("gain"), index=cols).sort_values(ascending=False)
-    return auc, imp
+    return auc, acu, imp
 
 
 def add_position(split: str, pts: pd.DataFrame) -> pd.DataFrame:
