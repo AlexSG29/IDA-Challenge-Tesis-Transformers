@@ -1,0 +1,13 @@
+formulación,l2,iteraciones,AUC falla,costo min_costo,costo umbral
+convencional,1,124,0.728,33553,32607
+convencional,10,57,0.733,33361,32089
+convencional,100,32,0.728,36868,33584
+convencional,1000,21,0.704,39535,34562
+convencional,10000,4,0.682,49246,36224
+convencional,100000,2,0.675,49566,36833
+landmarking,1,165,0.698,38677,37052
+landmarking,10,114,0.704,37779,35682
+landmarking,100,57,0.709,37677,34392
+landmarking,1000,34,0.71,37683,34385
+landmarking,10000,22,0.697,41818,35656
+landmarking,100000,4,0.681,49493,36182

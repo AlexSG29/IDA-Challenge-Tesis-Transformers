@@ -10,7 +10,8 @@ import lightgbm as lgb
 from sklearn.metrics import roc_auc_score
 from scipy.optimize import minimize_scalar
 from sklearn.isotonic import IsotonicRegression
-
+from scipy.optimize import minimize
+from scipy.special import expit, log_expit
 
 ROOT = Path(__file__).resolve().parent
 RAW = ROOT / "data" / "raw"
@@ -389,3 +390,101 @@ def paired_bootstrap(y, yhat_a, yhat_b, B: int = 2000, seed: int = 0, cost=COST)
     lo, hi = np.percentile(boots, [2.5, 97.5])
     return {"diferencia": int(diff.sum()), "IC95_inf": int(lo), "IC95_sup": int(hi),
             "significativa": bool(lo > 0 or hi < 0)}
+
+
+
+# ---------------------------------------------------------------- riesgo en tiempo discreto
+HAZ_EDGES = np.arange(0, 49, 6)          # 0, 6, ..., 48 -> 8 intervalos de amplitud 6
+CLASS_INTERVALS = {4: [0], 3: [1], 2: [2, 3], 1: [4, 5, 6, 7]}   # intervalos de cada clase
+
+
+def hazard_targets(time_left, event, censor_as_survival: bool = False):
+    """Matrices persona-periodo (n x 8): R = en riesgo en el intervalo j, E = falla en j.
+
+    - Falla en t <= 48: en riesgo hasta su intervalo, con E = 1 en ese intervalo.
+    - Falla o censura con t > 48: sobrevive los 8 intervalos.
+    - Censurado con t <= 48: solo los intervalos sobrevividos completos.
+      Con censor_as_survival=True (formulación convencional) se asume que sobrevive los 8.
+    """
+    t = np.asarray(time_left, float)
+    e = np.asarray(event, int)
+    lo, hi = HAZ_EDGES[:-1], HAZ_EDGES[1:]
+    j_ev = np.searchsorted(hi, t, side="left")
+    R = np.zeros((len(t), len(lo)), np.float32)
+    E = np.zeros_like(R)
+    ev = (e == 1) & (t <= HAZ_EDGES[-1])
+    surv = (t > HAZ_EDGES[-1]) | ((e == 0) & censor_as_survival)
+    R[surv] = 1
+    for i in np.where(ev)[0]:
+        R[i, : j_ev[i] + 1] = 1
+        E[i, j_ev[i]] = 1
+    cens = (e == 0) & ~surv
+    R[cens] = hi[None, :] <= t[cens, None]
+    return R, E
+
+
+class DiscreteHazard:
+    """Regresión logística de riesgo discreto: logit h_j(x) = a_j + x·b, con penalización L2."""
+    def __init__(self, l2: float = 1.0, max_iter: int = 300):
+        self.l2, self.max_iter = l2, max_iter
+
+    def fit(self, X, R, E, w=None):
+        X = np.asarray(X, np.float32)
+        n, d = X.shape
+        J = R.shape[1]
+        w = np.ones(n) if w is None else np.asarray(w, float)
+        WR = (w[:, None] * R).astype(np.float64)
+        sw = WR.sum()
+
+        def f(theta):
+            a, b = theta[:J], theta[J:]
+            Z = (X @ b.astype(np.float32)).astype(np.float64)[:, None] + a[None, :]
+            ll = E * log_expit(Z) + (1 - E) * log_expit(-Z)
+            loss = -(WR * ll).sum() / sw + 0.5 * self.l2 * (b @ b) / n
+            G = WR * (expit(Z) - E) / sw
+            gb = (X.T @ G.sum(1).astype(np.float32)).astype(np.float64) + self.l2 * b / n
+            return loss, np.r_[G.sum(0), gb]
+
+        p0 = np.clip((WR * E).sum(0) / WR.sum(0), 1e-4, 0.5)
+        th0 = np.r_[np.log(p0 / (1 - p0)), np.zeros(d)]
+        self.res_ = minimize(f, th0, jac=True, method="L-BFGS-B",
+                             options={"maxiter": self.max_iter})
+        self.a_, self.b_ = self.res_.x[:J], self.res_.x[J:]
+        return self
+
+    def hazards(self, X):
+        Z = (np.asarray(X, np.float32) @ self.b_.astype(np.float32))[:, None] + self.a_[None, :]
+        return expit(Z.astype(np.float64))
+
+    def predict_proba(self, X):
+        """Probabilidades de las 5 clases: P(falla en I_j) = h_j · S_{j-1}; clase 0 = S_8."""
+        h = self.hazards(X)
+        S_prev = np.cumprod(np.c_[np.ones(len(h)), 1 - h[:, :-1]], axis=1)
+        Pint = h * S_prev
+        P = np.zeros((len(h), 5))
+        P[:, 0] = np.prod(1 - h, axis=1)
+        for k, js in CLASS_INTERVALS.items():
+            P[:, k] = Pint[:, js].sum(1)
+        return P
+
+
+class TabularPreprocessor:
+    """Para modelos lineales: mediana para faltantes, estandarización y one-hot de Spec_*.
+    Se ajusta solo con datos de entrenamiento; categorías nuevas quedan en cero."""
+    def fit(self, df, cols):
+        self.cat_ = [c for c in cols if c.startswith("Spec_")]
+        self.num_ = [c for c in cols if c not in self.cat_]
+        x = df[self.num_].astype(np.float64)
+        self.med_ = x.median()
+        x = x.fillna(self.med_)
+        self.mu_, self.sd_ = x.mean(), x.std().replace(0, 1).fillna(1)
+        self.levels_ = {c: sorted(df[c].astype(str).unique()) for c in self.cat_}
+        return self
+
+    def transform(self, df):
+        x = ((df[self.num_].astype(np.float64).fillna(self.med_) - self.mu_) / self.sd_).clip(-10, 10)
+        parts = [x.to_numpy(np.float32)]
+        for c in self.cat_:
+            s = df[c].astype(str).to_numpy()
+            parts.append(np.column_stack([s == l for l in self.levels_[c][1:]]).astype(np.float32))
+        return np.hstack(parts)
