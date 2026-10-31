@@ -7,6 +7,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
+from sklearn.metrics import roc_auc_score
+
 
 ROOT = Path(__file__).resolve().parent
 RAW = ROOT / "data" / "raw"
@@ -229,3 +231,66 @@ def train_lgbm(X_fit, y_fit, X_val, y_val, params=None, seed=0, w_fit=None):
     dval = lgb.Dataset(X_val, y_val, reference=dfit)
     return lgb.train(p, dfit, num_boost_round=2000, valid_sets=[dval],
                      callbacks=[lgb.early_stopping(100, verbose=False)])
+
+# ---------------------------------------------------------------- cambio de distribución
+# Contadores cuya escala no cambia entre particiones (razón de medianas ≈ 1)
+STABLE_COUNTERS = ["171_0", "835_0", "427_0"]
+POS_COLS = [T, "n_hist"]  # posición del corte: edad y n.º de lecturas hasta t*
+
+
+def is_invariant(col: str) -> bool:
+    """True si la variable no depende del escalamiento por partición."""
+    if col == T or col.startswith("Spec_"):
+        return True                                   # edad y especificaciones
+    if col.startswith(("p_", "dt_")):
+        return True                                   # proporciones e intervalos
+    return any(col in (f"{k}_last", f"d_{k}_last", f"d_{k}_mean", f"d_{k}_slope")
+               for k in STABLE_COUNTERS)              # contadores estables
+
+
+def invariant_features(cols) -> list[str]:
+    """Filtra una lista de columnas y deja solo las invariantes (sin vehicle_id)."""
+    return [c for c in cols if c != ID and is_invariant(c)]
+
+
+def adversarial_auc(A: pd.DataFrame, B: pd.DataFrame, cols, w_A=None, seed: int = 0):
+    """AUC de un clasificador que distingue filas de A (0) y de B (1).
+
+    0,5 = indistinguibles; 1,0 = separables por completo. w_A = pesos opcionales para A.
+    Devuelve (auc, importancia de cada variable).
+    """
+    X = pd.concat([A[cols], B[cols]], ignore_index=True)
+    X = X.astype({c: "category" for c in cols if c.startswith("Spec_")})
+    y = np.r_[np.zeros(len(A)), np.ones(len(B))]
+    w = np.r_[np.ones(len(A)) if w_A is None else np.asarray(w_A, float), np.ones(len(B))]
+    idx = np.random.default_rng(seed).permutation(len(X))
+    tr, te = idx[: len(idx) // 2], idx[len(idx) // 2:]
+    m = lgb.train(dict(objective="binary", verbose=-1, seed=seed),
+                  lgb.Dataset(X.iloc[tr], y[tr], weight=w[tr]), num_boost_round=200)
+    auc = roc_auc_score(y[te], m.predict(X.iloc[te]), sample_weight=w[te])
+    imp = pd.Series(m.feature_importance("gain"), index=cols).sort_values(ascending=False)
+    return auc, imp
+
+
+def add_position(split: str, pts: pd.DataFrame) -> pd.DataFrame:
+    """Agrega n_hist (n.º de lecturas hasta t*, inclusive) a cada punto de corte."""
+    ro = pd.read_parquet(PROCESSED / f"{split}_readouts.parquet", columns=[ID, T])
+    ro["n_hist"] = ro.groupby(ID).cumcount() + 1
+    return pts[[ID, T]].merge(ro, on=[ID, T], how="left", validate="many_to_one")
+
+
+def position_weights(train_pts: pd.DataFrame, target_pts: pd.DataFrame,
+                     clip_q: float = 0.99, seed: int = 0) -> np.ndarray:
+    """Pesos de importancia para que los cortes de train imiten la posición de target.
+
+    w = P(target | edad, n_hist) / P(train | edad, n_hist), recortado en el cuantil clip_q
+    y normalizado a media 1. Usa solo la posición de los cortes, nunca etiquetas.
+    """
+    X = pd.concat([train_pts[POS_COLS], target_pts[POS_COLS]], ignore_index=True)
+    y = np.r_[np.zeros(len(train_pts)), np.ones(len(target_pts))]
+    m = lgb.train(dict(objective="binary", num_leaves=8, min_data_in_leaf=200,
+                       verbose=-1, seed=seed), lgb.Dataset(X, y), num_boost_round=100)
+    p = np.clip(m.predict(train_pts[POS_COLS]), 1e-3, 1 - 1e-3)
+    w = p / (1 - p)
+    w = np.minimum(w, np.quantile(w, clip_q))
+    return w / w.mean()
