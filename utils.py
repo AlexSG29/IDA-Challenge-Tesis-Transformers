@@ -17,8 +17,15 @@ ID, T = "vehicle_id", "time_step"
 
 # ---------------------------------------------------------------- carga
 def load_raw(split: str, kind: str) -> pd.DataFrame:
-    """kind: 'operational_readouts', 'specifications', 'tte' o 'labels'."""
-    return pd.read_csv(RAW / f"{split}_{kind}.csv")
+    """kind: 'operational_readouts', 'specifications', 'tte' o 'labels'.
+
+    Busca en data/raw/<split>/ y, si no está, en data/raw/.
+    """
+    name = f"{split}_{kind}.csv"
+    for path in (RAW / split / name, RAW / name):
+        if path.exists():
+            return pd.read_csv(path)
+    raise FileNotFoundError(f"No encontré {name} en {RAW / split} ni en {RAW}")
 
 
 def to_parquet(df: pd.DataFrame, name: str) -> Path:
