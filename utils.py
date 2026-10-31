@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 
 ROOT = Path(__file__).resolve().parent
 RAW = ROOT / "data" / "raw"
@@ -90,3 +91,46 @@ def add_increments(df: pd.DataFrame) -> pd.DataFrame:
 
     out["dt"] = df.groupby(ID)[T].diff()
     return pd.concat([df, pd.DataFrame(out, index=df.index)], axis=1)
+
+
+    # ---------------------------------------------------------------- etiquetas
+HORIZON = 48  # ventana máxima de las clases 1–4
+
+
+def tte_to_class(time_left: pd.Series) -> pd.Series:
+    """Clase del challenge: 4 = (0,6], 3 = (6,12], 2 = (12,24], 1 = (24,48], 0 = >48."""
+    bins = [-np.inf, 6, 12, 24, 48, np.inf]
+    return pd.cut(time_left, bins=bins, labels=[4, 3, 2, 1, 0], right=True).astype(int)
+
+
+def build_landmarks(ro: pd.DataFrame, tte: pd.DataFrame, k: int = 10,
+                    min_history: int = 5, seed: int = 0) -> pd.DataFrame:
+    """Elige al azar hasta k lecturas por vehículo como puntos de predicción t*.
+
+    - time_left: tiempo desde t* hasta la reparación o el fin del estudio.
+    
+    - event: 1 si hubo reparación, 0 si está censurado.
+    - y_conv: clase convencional (los censurados se etiquetan 0).
+    - y_cens: clase con censura; NaN si está censurado y quedan ≤ 48 unidades.
+    """
+    rng = np.random.default_rng(seed)
+    lm = ro[[ID, T]].sort_values([ID, T]).copy()
+    lm["n_hist"] = lm.groupby(ID).cumcount() + 1
+    lm = lm[lm["n_hist"] >= min_history]
+    lm["_r"] = rng.random(len(lm))
+    lm = lm[lm.groupby(ID)["_r"].rank(method="first") <= k].drop(columns="_r")
+
+    lm = lm.merge(tte, on=ID)
+    lm["time_left"] = lm["length_of_study_time_step"] - lm[T]
+    lm["event"] = lm["in_study_repair"]
+    lm["y_conv"] = tte_to_class(lm["time_left"]).where(lm["event"] == 1, 0)
+    known = (lm["event"] == 1) | (lm["time_left"] > HORIZON)
+    lm["y_cens"] = lm["y_conv"].where(known).astype("Int64")
+    return (lm.drop(columns=["length_of_study_time_step", "in_study_repair"])
+              .sort_values([ID, T]).reset_index(drop=True))
+
+
+def eval_points(ro: pd.DataFrame, labels: pd.DataFrame) -> pd.DataFrame:
+    """Última lectura de cada vehículo + su class_label (validation y test)."""
+    last = ro[[ID, T]].sort_values([ID, T]).groupby(ID).tail(1)
+    return last.merge(labels, on=ID, validate="one_to_one").reset_index(drop=True)
