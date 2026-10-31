@@ -219,13 +219,13 @@ def calibration_split(vehicle_ids, frac: float = 0.2, seed: int = 0) -> set:
 
 
 # ---------------------------------------------------------------- modelos
-def train_lgbm(X_fit, y_fit, X_val, y_val, params=None, seed=0):
-    """LightGBM multiclase con early stopping en validación."""
+def train_lgbm(X_fit, y_fit, X_val, y_val, params=None, seed=0, w_fit=None):
+    """LightGBM multiclase con early stopping en validación. w_fit = pesos opcionales."""
     p = dict(objective="multiclass", num_class=5, learning_rate=0.05, num_leaves=31,
              min_data_in_leaf=50, feature_fraction=0.5, bagging_fraction=0.8,
              bagging_freq=1, seed=seed, verbose=-1)
     p.update(params or {})
-    dfit = lgb.Dataset(X_fit, y_fit)
+    dfit = lgb.Dataset(X_fit, y_fit, weight=w_fit)
     dval = lgb.Dataset(X_val, y_val, reference=dfit)
     return lgb.train(p, dfit, num_boost_round=2000, valid_sets=[dval],
                      callbacks=[lgb.early_stopping(100, verbose=False)])
