@@ -1,9 +1,0 @@
-formulación,pesos,regla,costo_total,% a revisión,iteraciones,AUC falla
-convencional,sin pesos,argmax,57400,0.0,18,0.717
-convencional,sin pesos,min_costo,37884,40.0,18,0.717
-convencional,con pesos,argmax,57400,0.0,36,0.722
-convencional,con pesos,min_costo,40462,22.0,36,0.722
-landmarking,sin pesos,argmax,57400,0.0,4,0.683
-landmarking,sin pesos,min_costo,49517,100.0,4,0.683
-landmarking,con pesos,argmax,56444,0.1,271,0.747
-landmarking,con pesos,min_costo,37654,35.4,271,0.747

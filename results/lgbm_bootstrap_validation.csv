@@ -1,6 +1,0 @@
-comparación,diferencia,IC95_inf,IC95_sup,significativa
-H2 conv: min_costo vs umbral,4852,1420,8769,True
-H2 lm: min_costo vs umbral,596,-701,1495,False
-H2 lm: min_costo vs argmax,-22914,-32629,-14355,True
-H1: landmarking vs conv (umbral),-402,-5288,4225,False
-Mejor vs siempre 4,-16157,-20263,-11681,True
